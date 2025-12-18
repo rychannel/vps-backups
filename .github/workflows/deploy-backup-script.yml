@@ -98,4 +98,9 @@ jobs:
       - name: Configure cron (optional)
         if: env.CRON_SCHEDULE != '' && env.REMOTE_COMPOSE_FILE != '' && env.REMOTE_BACKUP_DIR != ''
         run: |
-          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o StrictHostKeyChecking=accept-new "$SSH_USER@$SSH_HOST" "sudo bash -c 'echo \"$CRON_SCHEDULE root $DEPLOY_PATH/compose_mysql_backup.py -f $REMOTE_COMPOSE_FILE -o $REMOTE_BACKUP_DIR >> /var/log/compose-mysql-backup.log 2>&1\" > /etc/cron.d/compose-mysql-backup && chmod 644 /etc/cron.d/compose-mysql-backup && touch /var/log/compose-mysql-backup.log && (systemctl reload cron || service cron reload || true)'
+          set -e
+          LINE="${CRON_SCHEDULE} root ${DEPLOY_PATH}/compose_mysql_backup.py -f ${REMOTE_COMPOSE_FILE} -o ${REMOTE_BACKUP_DIR} >> /var/log/compose-mysql-backup.log 2>&1"
+          # Send the cron line via stdin to remote 'tee' to avoid complex quoting
+          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o StrictHostKeyChecking=accept-new "$SSH_USER@$SSH_HOST" "sudo tee /etc/cron.d/compose-mysql-backup >/dev/null" <<< "$LINE"
+          # Set permissions and reload cron
+          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o StrictHostKeyChecking=accept-new "$SSH_USER@$SSH_HOST" "sudo chmod 644 /etc/cron.d/compose-mysql-backup && sudo touch /var/log/compose-mysql-backup.log && (sudo systemctl reload cron || sudo service cron reload || true)"

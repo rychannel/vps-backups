@@ -1,0 +1,101 @@
+name: Deploy Compose MySQL Backup
+
+on:
+  push:
+    branches: [ "main", "master" ]
+    paths:
+      - "compose_mysql_backup.py"
+      - ".github/workflows/deploy-backup-script.yml"
+  workflow_dispatch:
+    inputs:
+      deploy_path:
+        description: "Remote deploy path (overrides repo variable)"
+        required: false
+        default: ""
+      remote_compose_file:
+        description: "Remote docker-compose.yml path (overrides repo variable)"
+        required: false
+        default: ""
+      remote_backup_dir:
+        description: "Remote backup output directory (overrides repo variable)"
+        required: false
+        default: ""
+      cron_schedule:
+        description: "Cron schedule (e.g., '15 2 * * *'); leave blank to skip"
+        required: false
+        default: ""
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      SSH_HOST: ${{ secrets.SSH_HOST }}
+      SSH_USER: ${{ secrets.SSH_USER }}
+      SSH_PORT: ${{ secrets.SSH_PORT }}
+      SSH_KEY: ${{ secrets.SSH_KEY }}
+      # Non-sensitive values: prefer repository-level variables; can be overridden by workflow_dispatch inputs
+      DEPLOY_PATH: ${{ vars.DEPLOY_PATH }}
+      REMOTE_COMPOSE_FILE: ${{ vars.REMOTE_COMPOSE_FILE }}
+      REMOTE_BACKUP_DIR: ${{ vars.REMOTE_BACKUP_DIR }}
+      CRON_SCHEDULE: ${{ vars.CRON_SCHEDULE }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate required secrets
+        run: |
+          set -e
+          if [ -z "$SSH_HOST" ] || [ -z "$SSH_USER" ] || [ -z "$SSH_KEY" ]; then
+            echo "Missing required secrets: SSH_HOST, SSH_USER, SSH_KEY" >&2
+            exit 1
+          fi
+
+      - name: Set defaults
+        env:
+          INP_DEPLOY_PATH: ${{ github.event.inputs.deploy_path }}
+          INP_REMOTE_COMPOSE_FILE: ${{ github.event.inputs.remote_compose_file }}
+          INP_REMOTE_BACKUP_DIR: ${{ github.event.inputs.remote_backup_dir }}
+          INP_CRON_SCHEDULE: ${{ github.event.inputs.cron_schedule }}
+        run: |
+          set -e
+          : "${SSH_PORT:=22}"
+          # Fallback default for deploy path
+          if [ -z "$DEPLOY_PATH" ]; then
+            DEPLOY_PATH="/home/${SSH_USER}/compose-mysql-backup"
+          fi
+          # Override env with workflow_dispatch inputs if provided
+          if [ -n "${INP_DEPLOY_PATH}" ]; then DEPLOY_PATH="${INP_DEPLOY_PATH}"; fi
+          if [ -n "${INP_REMOTE_COMPOSE_FILE}" ]; then REMOTE_COMPOSE_FILE="${INP_REMOTE_COMPOSE_FILE}"; fi
+          if [ -n "${INP_REMOTE_BACKUP_DIR}" ]; then REMOTE_BACKUP_DIR="${INP_REMOTE_BACKUP_DIR}"; fi
+          if [ -n "${INP_CRON_SCHEDULE}" ]; then CRON_SCHEDULE="${INP_CRON_SCHEDULE}"; fi
+          echo "SSH_PORT=$SSH_PORT" >> "$GITHUB_ENV"
+          echo "DEPLOY_PATH=$DEPLOY_PATH" >> "$GITHUB_ENV"
+          echo "REMOTE_COMPOSE_FILE=$REMOTE_COMPOSE_FILE" >> "$GITHUB_ENV"
+          echo "REMOTE_BACKUP_DIR=$REMOTE_BACKUP_DIR" >> "$GITHUB_ENV"
+          echo "CRON_SCHEDULE=$CRON_SCHEDULE" >> "$GITHUB_ENV"
+
+      - name: Prepare SSH
+        run: |
+          set -euo pipefail
+          install -m 700 -d ~/.ssh
+          echo "$SSH_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          # Preload host key to avoid interactive prompt
+          ssh-keyscan -p "$SSH_PORT" "$SSH_HOST" >> ~/.ssh/known_hosts
+
+      - name: Create remote directory
+        run: |
+          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o StrictHostKeyChecking=accept-new "$SSH_USER@$SSH_HOST" "mkdir -p '$DEPLOY_PATH'"
+
+      - name: Upload backup script
+        run: |
+          scp -i ~/.ssh/id_ed25519 -P "$SSH_PORT" compose_mysql_backup.py "$SSH_USER@$SSH_HOST:$DEPLOY_PATH/"
+
+      - name: Post-deploy setup
+        run: |
+          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o StrictHostKeyChecking=accept-new "$SSH_USER@$SSH_HOST" "chmod +x '$DEPLOY_PATH/compose_mysql_backup.py'"
+
+      - name: Configure cron (optional)
+        if: env.CRON_SCHEDULE != '' && env.REMOTE_COMPOSE_FILE != '' && env.REMOTE_BACKUP_DIR != ''
+        run: |
+          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o StrictHostKeyChecking=accept-new "$SSH_USER@$SSH_HOST" "sudo bash -c 'echo \"$CRON_SCHEDULE root $DEPLOY_PATH/compose_mysql_backup.py -f $REMOTE_COMPOSE_FILE -o $REMOTE_BACKUP_DIR >> /var/log/compose-mysql-backup.log 2>&1\" > /etc/cron.d/compose-mysql-backup && chmod 644 /etc/cron.d/compose-mysql-backup && touch /var/log/compose-mysql-backup.log && (systemctl reload cron || service cron reload || true)'

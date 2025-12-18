@@ -61,7 +61,7 @@ jobs:
           : "${SSH_PORT:=22}"
           # Fallback default for deploy path
           if [ -z "$DEPLOY_PATH" ]; then
-            DEPLOY_PATH="/home/${SSH_USER}/compose-mysql-backup"
+            DEPLOY_PATH="/home/${SSH_USER}/compose-backup"
           fi
           # Override env with workflow_dispatch inputs if provided
           if [ -n "${INP_DEPLOY_PATH}" ]; then DEPLOY_PATH="${INP_DEPLOY_PATH}"; fi
@@ -99,8 +99,8 @@ jobs:
         if: env.CRON_SCHEDULE != '' && env.REMOTE_COMPOSE_FILE != '' && env.REMOTE_BACKUP_DIR != ''
         run: |
           set -e
-          LINE="${CRON_SCHEDULE} root ${DEPLOY_PATH}/compose_backup.py -f ${REMOTE_COMPOSE_FILE} -o ${REMOTE_BACKUP_DIR} >> /var/log/compose-mysql-backup.log 2>&1"
+          LINE="${CRON_SCHEDULE} root ${DEPLOY_PATH}/compose_backup.py -f ${REMOTE_COMPOSE_FILE} -o ${REMOTE_BACKUP_DIR} >> /var/log/compose-backup.log 2>&1"
           # Send the cron line via stdin to remote 'tee' to avoid complex quoting
-          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o StrictHostKeyChecking=accept-new "$SSH_USER@$SSH_HOST" "sudo tee /etc/cron.d/compose-mysql-backup >/dev/null" <<< "$LINE"
+          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o StrictHostKeyChecking=accept-new "$SSH_USER@$SSH_HOST" "sudo tee /etc/cron.d/compose-backup >/dev/null" <<< "$LINE"
           # Set permissions and reload cron
-          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o StrictHostKeyChecking=accept-new "$SSH_USER@$SSH_HOST" "sudo chmod 644 /etc/cron.d/compose-mysql-backup && sudo touch /var/log/compose-mysql-backup.log && (sudo systemctl reload cron || sudo service cron reload || true)"
+          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o StrictHostKeyChecking=accept-new "$SSH_USER@$SSH_HOST" "sudo chmod 644 /etc/cron.d/compose-backup && sudo touch /var/log/compose-mysql-backup.log && (sudo systemctl reload cron || sudo service cron reload || true)"

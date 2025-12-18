@@ -27,9 +27,10 @@ Options:
 ## What it backs up
 - Lists databases with `SHOW DATABASES;` inside each container
 - Excludes system DBs: `information_schema`, `performance_schema`, `mysql`, `sys`
-- Dumps each remaining database individually:
+- Dumps each remaining database individually using:
   - `mysqldump --single-transaction --quick --lock-tables=false`
-  - One `.sql` file per database per container
+- Writes one `.sql` per database directly to your chosen output directory
+- Deduplicates by database name across services/containers (first match wins)
 
 ## Notes
 - If `MYSQL_ROOT_PASSWORD` exists, root is used; otherwise uses `MYSQL_USER` + `MYSQL_PASSWORD`.
@@ -76,4 +77,4 @@ sudo bash -c 'cat > /etc/cron.d/compose-mysql-backup <<CRON
 CRON'
 ```
 
-Backups will be written under `/var/backups/docker-mysql/<timestamp>/` with one `.sql` per database.
+Backups will be written under `/var/backups/docker-mysql/` with one `.sql` per database name.

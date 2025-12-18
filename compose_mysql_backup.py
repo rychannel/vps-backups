@@ -3,9 +3,9 @@ import argparse
 import json
 import os
 import subprocess
-from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
+from typing import Set
 
 SYSTEM_DATABASES = {
     "information_schema",
@@ -156,7 +156,7 @@ def ensure_dir(path: Path) -> None:
     path.mkdir(parents=True, exist_ok=True)
 
 
-def backup_service_containers(service: str, containers: List[str], out_dir: Path) -> Dict[str, List[str]]:
+def backup_service_containers(service: str, containers: List[str], out_dir: Path, seen_dbs: Set[str]) -> Dict[str, List[str]]:
     results: Dict[str, List[str]] = {service: []}
     for container in containers:
         env = inspect_env(container)
@@ -170,15 +170,19 @@ def backup_service_containers(service: str, containers: List[str], out_dir: Path
             print(f"[WARN] {container}: No user databases found; skipping.")
             continue
         for db in dbs:
+            if db in seen_dbs:
+                print(f"[SKIP] Duplicate database '{db}' already dumped; skipping {container}.")
+                continue
             dump = dump_database(container, db, user, pwd)
             if dump is None:
                 print(f"[ERROR] {container}: Failed to dump {db}.")
                 continue
-            filename = out_dir / f"{service}__{container.replace('/', '')}__{db}.sql"
+            filename = out_dir / f"{db}.sql"
             with open(filename, "wb") as f:
                 f.write(dump)
+            seen_dbs.add(db)
             results[service].append(str(filename))
-            print(f"[OK] Saved {db} from {container} -> {filename}")
+            print(f"[OK] Saved {db} -> {filename}")
     return results
 
 
@@ -214,16 +218,17 @@ def main():
 
     mapping = map_services_to_containers(compose_file, mysql_services)
 
-    timestamp = datetime.utcnow().strftime("%Y%m%d-%H%M%S")
-    out_dir = out_root / timestamp
+    # Write directly to the provided output directory and deduplicate by DB name
+    out_dir = out_root
     ensure_dir(out_dir)
+    seen_dbs: Set[str] = set()
 
     summary: Dict[str, List[str]] = {}
     for svc, containers in mapping.items():
         if not containers:
             print(f"[WARN] No running containers for service '{svc}'. Is the stack up?")
             continue
-        res = backup_service_containers(svc, containers, out_dir)
+        res = backup_service_containers(svc, containers, out_dir, seen_dbs)
         summary.update(res)
 
     print("\n=== Backup Summary ===")

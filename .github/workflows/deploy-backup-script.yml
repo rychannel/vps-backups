@@ -20,6 +20,10 @@ on:
         description: "Remote backup output directory (overrides repo variable)"
         required: false
         default: ""
+      remote_docker_dir:
+        description: "Remote Docker directory to backup (overrides repo variable, e.g., /opt/docker)"
+        required: false
+        default: ""
       cron_schedule:
         description: "Cron schedule (e.g., '15 2 * * *'); leave blank to skip"
         required: false
@@ -37,6 +41,7 @@ jobs:
       DEPLOY_PATH: ${{ vars.DEPLOY_PATH }}
       REMOTE_COMPOSE_FILE: ${{ vars.REMOTE_COMPOSE_FILE }}
       REMOTE_BACKUP_DIR: ${{ vars.REMOTE_BACKUP_DIR }}
+      REMOTE_DOCKER_DIR: ${{ vars.REMOTE_DOCKER_DIR }}
       CRON_SCHEDULE: ${{ vars.CRON_SCHEDULE }}
     steps:
       - name: Checkout
@@ -55,6 +60,7 @@ jobs:
           INP_DEPLOY_PATH: ${{ github.event.inputs.deploy_path }}
           INP_REMOTE_COMPOSE_FILE: ${{ github.event.inputs.remote_compose_file }}
           INP_REMOTE_BACKUP_DIR: ${{ github.event.inputs.remote_backup_dir }}
+          INP_REMOTE_DOCKER_DIR: ${{ github.event.inputs.remote_docker_dir }}
           INP_CRON_SCHEDULE: ${{ github.event.inputs.cron_schedule }}
         run: |
           set -e
@@ -67,11 +73,13 @@ jobs:
           if [ -n "${INP_DEPLOY_PATH}" ]; then DEPLOY_PATH="${INP_DEPLOY_PATH}"; fi
           if [ -n "${INP_REMOTE_COMPOSE_FILE}" ]; then REMOTE_COMPOSE_FILE="${INP_REMOTE_COMPOSE_FILE}"; fi
           if [ -n "${INP_REMOTE_BACKUP_DIR}" ]; then REMOTE_BACKUP_DIR="${INP_REMOTE_BACKUP_DIR}"; fi
+          if [ -n "${INP_REMOTE_DOCKER_DIR}" ]; then REMOTE_DOCKER_DIR="${INP_REMOTE_DOCKER_DIR}"; fi
           if [ -n "${INP_CRON_SCHEDULE}" ]; then CRON_SCHEDULE="${INP_CRON_SCHEDULE}"; fi
           echo "SSH_PORT=$SSH_PORT" >> "$GITHUB_ENV"
           echo "DEPLOY_PATH=$DEPLOY_PATH" >> "$GITHUB_ENV"
           echo "REMOTE_COMPOSE_FILE=$REMOTE_COMPOSE_FILE" >> "$GITHUB_ENV"
           echo "REMOTE_BACKUP_DIR=$REMOTE_BACKUP_DIR" >> "$GITHUB_ENV"
+          echo "REMOTE_DOCKER_DIR=$REMOTE_DOCKER_DIR" >> "$GITHUB_ENV"
           echo "CRON_SCHEDULE=$CRON_SCHEDULE" >> "$GITHUB_ENV"
 
       - name: Prepare SSH
@@ -99,7 +107,11 @@ jobs:
         if: env.CRON_SCHEDULE != '' && env.REMOTE_COMPOSE_FILE != '' && env.REMOTE_BACKUP_DIR != ''
         run: |
           set -e
-          LINE="${CRON_SCHEDULE} root ${DEPLOY_PATH}/compose_backup.py -f ${REMOTE_COMPOSE_FILE} -o ${REMOTE_BACKUP_DIR} >> /var/log/compose-backup.log 2>&1"
+          CMD_ARGS="-f ${REMOTE_COMPOSE_FILE} -o ${REMOTE_BACKUP_DIR}"
+          if [ -n "${REMOTE_DOCKER_DIR}" ]; then
+            CMD_ARGS="${CMD_ARGS} -d ${REMOTE_DOCKER_DIR}"
+          fi
+          LINE="${CRON_SCHEDULE} root ${DEPLOY_PATH}/compose_backup.py ${CMD_ARGS} >> /var/log/compose-backup.log 2>&1"
           # Send the cron line via stdin to remote 'tee' to avoid complex quoting
           ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o StrictHostKeyChecking=accept-new "$SSH_USER@$SSH_HOST" "sudo tee /etc/cron.d/compose-backup >/dev/null" <<< "$LINE"
           # Set permissions and reload cron

@@ -2,6 +2,7 @@
 import argparse
 import json
 import os
+import shutil
 import subprocess
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -140,6 +141,8 @@ def safe_filename_for_bind(source_path: str) -> str:
 
 def backup_volumes_for_service(service: str, containers: List[str], out_dir: Path, seen_vols: Set[str]) -> Dict[str, List[str]]:
     results: Dict[str, List[str]] = {service: []}
+    vol_dir = out_dir / "volumes"
+    ensure_dir(vol_dir)
     # Aggregate mounts across containers; dedupe by key
     for container in containers:
         mounts = inspect_mounts(container)
@@ -171,7 +174,7 @@ def backup_volumes_for_service(service: str, containers: List[str], out_dir: Pat
             if data is None:
                 print(f"[ERROR] Failed to archive mount (type={mtype}, name={name}, src={src})")
                 continue
-            filename = out_dir / out_name
+            filename = vol_dir / out_name
             with open(filename, "wb") as f:
                 f.write(data)
             seen_vols.add(key)
@@ -241,8 +244,41 @@ def ensure_dir(path: Path) -> None:
     path.mkdir(parents=True, exist_ok=True)
 
 
+def backup_docker_directory(docker_dir: Optional[Path], out_dir: Path) -> Optional[str]:
+    """Tar and gzip a Docker directory (e.g., /opt/docker)."""
+    if not docker_dir or not docker_dir.exists():
+        return None
+    try:
+        out_path = out_dir / "docker-dir.tar.gz"
+        cmd = ["tar", "-C", str(docker_dir.parent), "-czf", str(out_path), docker_dir.name]
+        p = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=False, check=False)
+        if p.returncode != 0:
+            print(f"[WARN] Failed to tar {docker_dir}: {p.stderr.decode()}")
+            return None
+        size_mb = out_path.stat().st_size / (1024 * 1024)
+        print(f"[OK] Saved docker directory -> {out_path} ({size_mb:.1f} MB)")
+        return str(out_path)
+    except Exception as e:
+        print(f"[WARN] Failed to backup docker directory: {e}")
+        return None
+
+
+def backup_compose_file(compose_file: Path, out_dir: Path) -> Optional[str]:
+    """Copy the compose file to the output directory for reference."""
+    try:
+        out_path = out_dir / "docker-compose.yml"
+        shutil.copy2(compose_file, out_path)
+        print(f"[OK] Saved compose config -> {out_path}")
+        return str(out_path)
+    except Exception as e:
+        print(f"[WARN] Failed to backup compose file: {e}")
+        return None
+
+
 def backup_service_containers(service: str, containers: List[str], out_dir: Path, seen_dbs: Set[str]) -> Dict[str, List[str]]:
     results: Dict[str, List[str]] = {service: []}
+    db_dir = out_dir / "db"
+    ensure_dir(db_dir)
     for container in containers:
         env = inspect_env(container)
         creds = resolve_mysql_credentials(env)
@@ -262,7 +298,7 @@ def backup_service_containers(service: str, containers: List[str], out_dir: Path
             if dump is None:
                 print(f"[ERROR] {container}: Failed to dump {db}.")
                 continue
-            filename = out_dir / f"{db}.sql"
+            filename = db_dir / f"{db}.sql"
             with open(filename, "wb") as f:
                 f.write(dump)
             seen_dbs.add(db)
@@ -276,10 +312,12 @@ def main():
     parser.add_argument("--compose", "-f", type=Path, default=Path("docker-compose.yml"), help="Path to docker-compose.yml")
     parser.add_argument("--out", "-o", type=Path, default=Path("backups"), help="Output directory for backups")
     parser.add_argument("--service", "-s", action="append", help="Limit backup to specific service(s)")
+    parser.add_argument("--docker-dir", "-d", type=Path, default=None, help="Optional Docker directory to backup (e.g., /opt/docker)")
     args = parser.parse_args()
 
     compose_file: Path = args.compose
     out_root: Path = args.out
+    docker_dir: Optional[Path] = args.docker_dir
 
     if not compose_file.exists():
         print(f"[ERROR] Compose file not found: {compose_file}")
@@ -306,6 +344,13 @@ def main():
     # Write directly to the provided output directory and deduplicate
     out_dir = out_root
     ensure_dir(out_dir)
+    
+    # Backup the compose file for reference
+    compose_backup = backup_compose_file(compose_file, out_dir)
+    
+    # Backup docker directory if provided
+    docker_backup = backup_docker_directory(docker_dir, out_dir)
+    
     seen_dbs: Set[str] = set()
     seen_vols: Set[str] = set()
 

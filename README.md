@@ -42,6 +42,24 @@ Options:
   - `volume__<name>.tar.gz` for named volumes
   - `bind__<normalized-host-path>.tar.gz` for bind mounts
 
+## Output Directory Structure
+```
+backups/
+├── docker-compose.yml
+├── docker-dir.tar.gz        (optional, if --docker-dir is provided)
+├── db/
+│   ├── database1.sql
+│   ├── database2.sql
+│   └── ...
+└── volumes/
+    ├── volume__myvolume.tar.gz
+    ├── bind__host_path.tar.gz
+    └── ...
+```
+
+## Optional Parameters
+- `--docker-dir` / `-d`: Path to a Docker directory to backup and compress (e.g., `/opt/docker`). If provided, a `docker-dir.tar.gz` file will be created in the output directory.
+
 ## Notes
 - If `MYSQL_ROOT_PASSWORD` exists, root is used; otherwise uses `MYSQL_USER` + `MYSQL_PASSWORD`.
 - For stacks using MariaDB, `MARIADB_*` env vars are supported similarly.

@@ -4,7 +4,7 @@ on:
   push:
     branches: [ "main", "master" ]
     paths:
-      - "compose_mysql_backup.py"
+      - "compose_backup.py"
       - ".github/workflows/deploy-backup-script.yml"
   workflow_dispatch:
     inputs:
@@ -89,17 +89,17 @@ jobs:
 
       - name: Upload backup script
         run: |
-          scp -i ~/.ssh/id_ed25519 -P "$SSH_PORT" compose_mysql_backup.py "$SSH_USER@$SSH_HOST:$DEPLOY_PATH/"
+          scp -i ~/.ssh/id_ed25519 -P "$SSH_PORT" compose_backup.py "$SSH_USER@$SSH_HOST:$DEPLOY_PATH/"
 
       - name: Post-deploy setup
         run: |
-          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o StrictHostKeyChecking=accept-new "$SSH_USER@$SSH_HOST" "chmod +x '$DEPLOY_PATH/compose_mysql_backup.py'"
+          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o StrictHostKeyChecking=accept-new "$SSH_USER@$SSH_HOST" "chmod +x '$DEPLOY_PATH/compose_backup.py'"
 
       - name: Configure cron (optional)
         if: env.CRON_SCHEDULE != '' && env.REMOTE_COMPOSE_FILE != '' && env.REMOTE_BACKUP_DIR != ''
         run: |
           set -e
-          LINE="${CRON_SCHEDULE} root ${DEPLOY_PATH}/compose_mysql_backup.py -f ${REMOTE_COMPOSE_FILE} -o ${REMOTE_BACKUP_DIR} >> /var/log/compose-mysql-backup.log 2>&1"
+          LINE="${CRON_SCHEDULE} root ${DEPLOY_PATH}/compose_backup.py -f ${REMOTE_COMPOSE_FILE} -o ${REMOTE_BACKUP_DIR} >> /var/log/compose-mysql-backup.log 2>&1"
           # Send the cron line via stdin to remote 'tee' to avoid complex quoting
           ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o StrictHostKeyChecking=accept-new "$SSH_USER@$SSH_HOST" "sudo tee /etc/cron.d/compose-mysql-backup >/dev/null" <<< "$LINE"
           # Set permissions and reload cron

@@ -16,7 +16,7 @@ From the project directory containing your compose file:
 Set-Location "C:\path\to\your\project"
 
 # Run the backup script from the vps-backups workspace
-python "C:\Users\ryanm\OneDrive\Documents\vps-backups\compose_mysql_backup.py" -f .\docker-compose.yml -o "C:\Users\ryanm\OneDrive\Documents\vps-backups\backups"
+python "C:\Users\ryanm\OneDrive\Documents\vps-backups\compose_backup.py" -f .\docker-compose.yml -o "C:\Users\ryanm\OneDrive\Documents\vps-backups\backups"
 ```
 
 Options:
@@ -31,6 +31,16 @@ Options:
   - `mysqldump --single-transaction --quick --lock-tables=false`
 - Writes one `.sql` per database directly to your chosen output directory
 - Deduplicates by database name across services/containers (first match wins)
+
+## Volume Backups
+- Detects mounts for detected MySQL/MariaDB services via `docker inspect .Mounts`
+- Backs up both named volumes and bind mounts:
+  - Named volumes: archived via `docker run --rm -v <vol>:/_backup_src busybox tar -C /_backup_src -czf - .`
+  - Bind mounts: archived via `docker run --rm -v <host_path>:/_backup_src busybox tar -C /_backup_src -czf - .`
+- Deduplicates by volume name (for volumes) and host path (for binds)
+- Output files:
+  - `volume__<name>.tar.gz` for named volumes
+  - `bind__<normalized-host-path>.tar.gz` for bind mounts
 
 ## Notes
 - If `MYSQL_ROOT_PASSWORD` exists, root is used; otherwise uses `MYSQL_USER` + `MYSQL_PASSWORD`.
@@ -47,7 +57,7 @@ Prereqs on the server:
 
 ```powershell
 # Replace host, user, and destination path
-scp C:\Users\ryanm\OneDrive\Documents\vps-backups\compose_mysql_backup.py user@host:~/compose-mysql-backup/
+scp C:\Users\ryanm\OneDrive\Documents\vps-backups\compose_backup.py user@host:~/compose-mysql-backup/
 ```
 
 2) On the server, make it executable and run a test:
@@ -56,16 +66,16 @@ scp C:\Users\ryanm\OneDrive\Documents\vps-backups\compose_mysql_backup.py user@h
 ssh user@host << 'EOF'
 set -e
 cd ~/compose-mysql-backup
-chmod +x compose_mysql_backup.py
+chmod +x compose_backup.py
 # Example run: adjust paths to your compose file and desired output directory
-./compose_mysql_backup.py -f /srv/app/docker-compose.yml -o /var/backups/docker-mysql
+./compose_backup.py -f /srv/app/docker-compose.yml -o /var/backups/docker-mysql
 EOF
 ```
 
 3) Optional: limit to specific services
 
 ```bash
-./compose_mysql_backup.py -f /srv/app/docker-compose.yml -o /var/backups/docker-mysql -s db -s mariadb
+./compose_backup.py -f /srv/app/docker-compose.yml -o /var/backups/docker-mysql -s db -s mariadb
 ```
 
 4) Schedule with cron (daily at 02:15):
@@ -73,7 +83,7 @@ EOF
 ```bash
 sudo bash -c 'cat > /etc/cron.d/compose-mysql-backup <<CRON
 # m h dom mon dow user  command
-15 2 * * * root /home/user/compose-mysql-backup/compose_mysql_backup.py -f /srv/app/docker-compose.yml -o /var/backups/docker-mysql >> /var/log/compose-mysql-backup.log 2>&1
+15 2 * * * root /home/user/compose-mysql-backup/compose_backup.py -f /srv/app/docker-compose.yml -o /var/backups/docker-mysql >> /var/log/compose-mysql-backup.log 2>&1
 CRON'
 ```
 

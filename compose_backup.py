@@ -6,6 +6,7 @@ import subprocess
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 from typing import Set
+import re
 
 SYSTEM_DATABASES = {
     "information_schema",
@@ -93,6 +94,90 @@ def map_services_to_containers(compose_file: Path, target_services: List[str]) -
                         break
 
     return mapping
+
+
+def inspect_mounts(container: str) -> List[Dict]:
+    code, out, err = run_cmd(["docker", "inspect", "--format", "{{json .Mounts}}", container])
+    if code != 0:
+        return []
+    try:
+        mounts = json.loads(out)
+    except json.JSONDecodeError:
+        return []
+    return mounts if isinstance(mounts, list) else []
+
+
+def docker_tar_mount_source(source_spec: str) -> Optional[bytes]:
+    """Run a short-lived container to tar-gzip a mounted source path.
+    source_spec examples:
+      - named volume: "myvol:/_backup_src"
+      - bind path: "/host/path:/_backup_src"
+    """
+    # Prefer busybox; fallback to alpine
+    for image in ("busybox", "alpine"):
+        cmd = [
+            "docker", "run", "--rm",
+            "-v", source_spec,
+            image,
+            "sh", "-c",
+            "tar -C /_backup_src -czf - . || (echo 'tar failed' >&2; exit 1)",
+        ]
+        try:
+            p = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=False, check=False)
+        except FileNotFoundError:
+            return None
+        if p.returncode == 0:
+            return p.stdout
+    return None
+
+
+def safe_filename_for_bind(source_path: str) -> str:
+    # Normalize bind source path into a safe filename segment
+    # Replace path separators and special chars with '_'
+    base = re.sub(r"[^A-Za-z0-9._-]+", "_", source_path.strip())
+    return base.strip("_") or "bind_path"
+
+
+def backup_volumes_for_service(service: str, containers: List[str], out_dir: Path, seen_vols: Set[str]) -> Dict[str, List[str]]:
+    results: Dict[str, List[str]] = {service: []}
+    # Aggregate mounts across containers; dedupe by key
+    for container in containers:
+        mounts = inspect_mounts(container)
+        for m in mounts:
+            mtype = (m.get("Type") or m.get("type") or "").lower()
+            dest = m.get("Destination") or m.get("Target") or m.get("destination") or m.get("target")
+            src = m.get("Source") or m.get("source")
+            name = m.get("Name") or m.get("name")
+            if not dest:
+                continue
+            key = None
+            out_name = None
+            source_spec = None
+            if mtype == "volume" and name:
+                key = f"volume::{name}"
+                out_name = f"volume__{name}.tar.gz"
+                source_spec = f"{name}:/_backup_src"
+            elif mtype == "bind" and src:
+                safe = safe_filename_for_bind(src)
+                key = f"bind::{src}"
+                out_name = f"bind__{safe}.tar.gz"
+                source_spec = f"{src}:/_backup_src"
+            else:
+                # Skip other mount types (tmpfs, npipe, etc.)
+                continue
+            if key in seen_vols:
+                continue
+            data = docker_tar_mount_source(source_spec)
+            if data is None:
+                print(f"[ERROR] Failed to archive mount (type={mtype}, name={name}, src={src})")
+                continue
+            filename = out_dir / out_name
+            with open(filename, "wb") as f:
+                f.write(data)
+            seen_vols.add(key)
+            results[service].append(str(filename))
+            print(f"[OK] Saved mount (type={mtype}) -> {filename}")
+    return results
 
 
 def inspect_env(container: str) -> Dict[str, str]:
@@ -187,9 +272,9 @@ def backup_service_containers(service: str, containers: List[str], out_dir: Path
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Backup MySQL/MariaDB databases from Docker Compose services.")
+    parser = argparse.ArgumentParser(description="Backup MySQL/MariaDB databases and attached volumes from Docker Compose services.")
     parser.add_argument("--compose", "-f", type=Path, default=Path("docker-compose.yml"), help="Path to docker-compose.yml")
-    parser.add_argument("--out", "-o", type=Path, default=Path("backups"), help="Output directory for SQL dumps")
+    parser.add_argument("--out", "-o", type=Path, default=Path("backups"), help="Output directory for backups")
     parser.add_argument("--service", "-s", action="append", help="Limit backup to specific service(s)")
     args = parser.parse_args()
 
@@ -202,7 +287,7 @@ def main():
 
     config = compose_config_json(compose_file)
     if not config:
-        print("[ERROR] Failed to load Compose config (JSON). Ensure Docker Desktop and Compose v2 are installed.")
+        print("[ERROR] Failed to load Compose config (JSON). Ensure Docker and Compose v2 are installed.")
         raise SystemExit(2)
 
     mysql_services = find_mysql_services(config)
@@ -218,18 +303,24 @@ def main():
 
     mapping = map_services_to_containers(compose_file, mysql_services)
 
-    # Write directly to the provided output directory and deduplicate by DB name
+    # Write directly to the provided output directory and deduplicate
     out_dir = out_root
     ensure_dir(out_dir)
     seen_dbs: Set[str] = set()
+    seen_vols: Set[str] = set()
 
     summary: Dict[str, List[str]] = {}
     for svc, containers in mapping.items():
         if not containers:
             print(f"[WARN] No running containers for service '{svc}'. Is the stack up?")
             continue
-        res = backup_service_containers(svc, containers, out_dir, seen_dbs)
-        summary.update(res)
+        res_db = backup_service_containers(svc, containers, out_dir, seen_dbs)
+        summary.update(res_db)
+        res_vol = backup_volumes_for_service(svc, containers, out_dir, seen_vols)
+        if svc in summary:
+            summary[svc].extend(res_vol.get(svc, []))
+        else:
+            summary.update(res_vol)
 
     print("\n=== Backup Summary ===")
     for svc, files in summary.items():

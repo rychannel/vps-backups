@@ -245,18 +245,16 @@ def ensure_dir(path: Path) -> None:
 
 
 def backup_docker_directory(docker_dir: Optional[Path], out_dir: Path) -> Optional[str]:
-    """Tar and gzip a Docker directory (e.g., /opt/docker)."""
+    """Copy a Docker directory recursively to the output directory."""
     if not docker_dir or not docker_dir.exists():
         return None
     try:
-        out_path = out_dir / "docker-dir.tar.gz"
-        cmd = ["tar", "-C", str(docker_dir.parent), "-czf", str(out_path), docker_dir.name]
-        p = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=False, check=False)
-        if p.returncode != 0:
-            print(f"[WARN] Failed to tar {docker_dir}: {p.stderr.decode()}")
-            return None
-        size_mb = out_path.stat().st_size / (1024 * 1024)
-        print(f"[OK] Saved docker directory -> {out_path} ({size_mb:.1f} MB)")
+        out_path = out_dir / "docker_dir"
+        if out_path.exists():
+            shutil.rmtree(out_path)
+        shutil.copytree(docker_dir, out_path, dirs_exist_ok=True)
+        size_mb = sum(f.stat().st_size for f in out_path.rglob("*") if f.is_file()) / (1024 * 1024)
+        print(f"[OK] Copied docker directory -> {out_path} ({size_mb:.1f} MB)")
         return str(out_path)
     except Exception as e:
         print(f"[WARN] Failed to backup docker directory: {e}")

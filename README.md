@@ -46,14 +46,17 @@ Options:
 ```
 backups/
 ├── docker-compose.yml
-├── docker-dir.tar.gz        (optional, if --docker-dir is provided)
 ├── db/
 │   ├── database1.sql
 │   ├── database2.sql
 │   └── ...
-└── volumes/
-    ├── volume__myvolume.tar.gz
-    ├── bind__host_path.tar.gz
+├── volumes/
+│   ├── volume__myvolume.tar.gz
+│   ├── bind__host_path.tar.gz
+│   └── ...
+└── docker_dir/              (optional, if --docker-dir is provided)
+    ├── project1/
+    ├── project2/
     └── ...
 ```
 
